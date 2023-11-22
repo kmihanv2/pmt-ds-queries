@@ -1,0 +1,56 @@
+CREATE OR REPLACE TABLE
+  shopify-dw.scratch.sp_rev_cost_kpi AS
+SELECT
+  *
+FROM (
+  SELECT
+    DATE_TRUNC(sd.reported_at, MONTH) AS date,
+    shop_fpa_region_14_code,
+  IF
+    (shop_plan_name = 'shopify_plus','Plus','Standard') AS merchant_type,
+  IF
+    (api_client_type = 'Retail','Retail','Online') AS sales_channel,
+    CASE
+      WHEN shopify_payments_payment_method_name <> 'credit_card' THEN 'LPM'
+      WHEN shopify_payments_payment_method_name IN ('credit_card')
+    AND card_funding_source = 'debit' THEN 'debit'
+      WHEN shopify_payments_payment_method_name IN ('credit_card') OR card_funding_source IN ('credit', 'prepaid') THEN 'credit'
+    ELSE
+    card_funding_source
+  END
+    AS card_funding,
+    SUM(
+      CASE
+        WHEN gpv_usd > 0 THEN gpv_usd
+      ELSE
+      0
+    END
+      ) AS gross_gpv,
+    COUNT(CASE
+        WHEN gpv_usd > 0 THEN gpv_usd
+      ELSE
+      0
+    END
+      ) AS gross_gpv_orders,
+    SUM(gpv_usd) AS gpv,
+    SUM(processing_revenue_usd + extended_authorization_fee_amount_usd + chargeback_revenue_usd) AS revenue,
+    SUM(processing_revenue_usd + extended_authorization_fee_amount_usd) AS processing_revenue_usd,
+    SUM(chargeback_revenue_usd) AS chargeback_revenue_usd,
+    SUM(network_cost_usd + apm_cost_usd + dispute_interchange_fee_cost_usd + dispute_cost_usd + blended_cost_usd + per_sale_cost_usd) AS network_cost_rollup,
+    SUM(apm_cost_usd + per_sale_cost_usd) AS lpm_costs,
+    SUM(volume_cost_usd + three_d_secure_cost_usd) AS stripe_fees,
+    SUM(processing_cost_usd) AS paypal_fees
+  FROM
+    `shopify-dw.marts.payments_gmv_revenue_costs_summary` AS sd
+  WHERE
+    DATE_TRUNC(sd.reported_at, MONTH) >= '2021-01-01'
+    AND included_in_gmv IS TRUE
+  GROUP BY
+    1,
+    2,
+    3,
+    4,
+    5
+  ORDER BY
+    1,
+    5 DESC )
