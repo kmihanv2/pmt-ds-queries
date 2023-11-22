@@ -1,0 +1,165 @@
+CREATE OR REPLACE TABLE
+  shopify-dw.scratch.sp_daily_gmv_kpi AS
+SELECT
+  *
+FROM (
+  WITH
+    #VOLUME DATA
+    vol AS (
+    SELECT
+      DATE_TRUNC(vol.reported_at, day) AS reported_at,
+      order_transaction_id,
+      shop_id,
+      order_api_client_id,
+      SUM(vol.gmv_usd) AS gmv,
+      SUM(vol.gpv_usd) AS gpv,
+      SUM(CASE
+          WHEN vol.gmv_usd > 0 THEN vol.gmv_usd
+      END
+        ) AS gross_gmv,
+      SUM(CASE
+          WHEN vol.gpv_usd > 0 THEN vol.gpv_usd
+      END
+        ) AS gross_gpv,
+      COUNT(CASE
+          WHEN vol.gpv_usd > 0 THEN vol.gpv_usd
+      END
+        ) AS gross_gpv_orders
+    FROM
+      `shopify-dw.finance.gross_merchandise_volume` AS vol
+    WHERE
+      DATE_TRUNC(vol.reported_at, day) >= '2021-01-01'
+    GROUP BY
+      1,
+      2,
+      3,
+      4 ),
+    --
+    --
+    --
+    #API CLIENT ID FOR SALES CHANNEL
+    api AS (
+    SELECT
+      api_client_id,
+    IF
+      (channels_reporting_level_1 = 'Retail','Retail','Online') AS sales_channel,
+    FROM
+      `sdp-prd-finance-automation.fpa_reporting_base.base__api_client_dimension`
+    GROUP BY
+      1,
+      2 ),
+    --
+    --
+    --
+    #COHORT DATA
+    coh AS (
+    SELECT
+      shop_id,
+      DATE_TRUNC(first_gpv_reported_at, year) AS first_gpv_cohort_year,
+      CASE
+        WHEN EXTRACT(YEAR FROM first_gpv_reported_at) < 2021 THEN 'Pre-2021'
+        WHEN first_gpv_reported_at IS NULL THEN 'Non-SP'
+      ELSE
+      CAST(EXTRACT(YEAR
+        FROM
+          first_gpv_reported_at) AS string)
+    END
+      AS simplified_first_gpv_cohort_year,
+    FROM
+      `shopify-dw.marts.shop_shopify_payments_status_summary` AS coh
+    GROUP BY
+      1,
+      2,
+      3),
+    --
+    --
+    --
+    #SHOP DIMENSION
+    shop AS (
+    SELECT
+      sd.shop_id,
+      sd.shop_country_code,
+      cd.geographic_region_code AS region,
+      fc.fpa_region_14,
+      CASE
+        WHEN sd.current_merchant_deal_type = 'Plus Merchant' THEN 'Plus'
+      ELSE
+      'Standard'
+    END
+      AS merchant_type
+    FROM
+      `sdp-prd-finance-automation.fpa_reporting_base.base__shop_dimension` AS sd
+    LEFT JOIN
+      `sdp-prd-finance-automation.fpa_reporting_base.base__country_dimension` AS cd
+    ON
+      sd.shop_country_code = cd.country_code
+    LEFT JOIN
+      `shopify-dw.finance.countries`AS fc
+    ON
+      cd.country_code = fc.country_code
+    GROUP BY
+      1,
+      2,
+      3,
+      4,
+      5 )
+    --
+    --
+    --
+    #MAIN QUERY
+  SELECT
+    DATE_TRUNC(vol.reported_at, day) AS date,
+    coh.simplified_first_gpv_cohort_year AS first_gpv_cohort_year,
+    shop.merchant_type,
+    api.sales_channel,
+    shop.fpa_region_14,
+    shop.region,
+    SUM(vol.gmv) AS gmv,
+    SUM(vol.gpv) AS gpv,
+    SUM(CASE
+        WHEN vol.gmv > 0 THEN vol.gmv
+    END
+      ) AS gross_gmv,
+    SUM(CASE
+        WHEN vol.gpv > 0 THEN vol.gpv
+    END
+      ) AS gross_gpv,
+    COUNT(CASE
+        WHEN vol.gpv > 0 THEN vol.gpv
+    END
+      ) AS gross_gpv_orders,
+    sum (CASE
+        WHEN DATE_TRUNC(vol.reported_at, year) >= DATE_TRUNC(coh.first_gpv_cohort_year, year) THEN vol.gmv
+      ELSE
+      0
+    END
+      ) AS cohort_gmv,
+    sum (CASE
+        WHEN DATE_TRUNC(vol.reported_at, year) >= DATE_TRUNC(coh.first_gpv_cohort_year, year) THEN vol.gpv
+      ELSE
+      0
+    END
+      ) AS cohort_gpv
+  FROM
+    vol
+  LEFT JOIN
+    api
+  ON
+    CAST(vol.order_api_client_id AS string) = api.api_client_id
+  LEFT JOIN
+    coh
+  ON
+    vol.shop_id = coh.shop_id
+  LEFT JOIN
+    shop
+  ON
+    cast(vol.shop_id as string) = shop.shop_id
+  WHERE
+    DATE_TRUNC(vol.reported_at, day) >= '2021-01-01'
+  GROUP BY
+    1,
+    2,
+    3,
+    4,
+    5,
+    6)
