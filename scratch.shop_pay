@@ -1,0 +1,86 @@
+CREATE OR REPLACE TABLE
+  shopify-dw.scratch.kayvon_shopPay AS
+SELECT
+  *
+FROM (
+  WITH
+    --
+    --
+    --
+    -- SHOP PAY DATA
+    pay AS (
+    SELECT
+      CAST(DATE_TRUNC(reported_at_date, MONTH) AS date) AS date,
+      pa.shop_id,
+      CASE
+        WHEN shop_plan_type = 'Non-Plus Merchant' THEN 'Standard'
+        WHEN shop_plan_type = 'Plus Merchant' THEN 'Plus'
+      ELSE
+      NULL
+    END
+      AS merchant_type,
+      "Online" AS sales_channel,
+      SUM(pay_gmv) AS shop_pay_gmv,
+      SUM(CASE
+          WHEN checkout_method = 'express' THEN total_gmv
+        ELSE
+        0
+      END
+        ) AS paypal_express_gmv,
+      SUM(total_gmv) AS online_gmv,
+    FROM
+      `sdp-prd-shop-ml.mart.mart__shop_pay__growth_metrics__shops` AS pa
+    WHERE
+      1=1
+      AND order_api_client_id = 580111
+    GROUP BY
+      1,
+      2,
+      3,
+      4),
+    --
+    --
+    --
+    -- SP GPV and GMV DATA
+    sp AS(
+    SELECT
+      CAST(DATE_TRUNC(date,month) AS date) AS date,
+      shop_id,
+      first_gpv_cohort_year,
+      sales_channel,
+      merchant_type,
+      SUM(gmv) AS gmv,
+      SUM(gpv) AS gpv
+    FROM
+      `shopify-dw.scratch.sp_shop_daily_gmv_kpi`
+    GROUP BY
+      1,
+      2,
+      3,
+      4,
+      5)
+    --
+    --
+    --
+    --
+    -- MAIN QUERY
+  SELECT
+    DATE_TRUNC(sp.date, month) AS date,
+    -- sp.shop_id,
+    sp.first_gpv_cohort_year,
+    sp.sales_channel,
+    sp.merchant_type,
+    sp.gmv AS gmv,
+    pay.online_gmv AS online_gmv,
+    sp.gpv AS gpv,
+    pay.shop_pay_gmv AS shop_pay_gmv,
+    pay.paypal_express_gmv AS paypal_express_gmv
+  FROM
+    sp
+  LEFT JOIN
+    pay
+  ON
+    DATE_TRUNC(sp.date, month) = DATE_TRUNC(pay.date, month)
+    AND sp.shop_id = pay.shop_id
+    AND sp.sales_channel = pay.sales_channel
+    AND sp.merchant_type = pay.merchant_type )
