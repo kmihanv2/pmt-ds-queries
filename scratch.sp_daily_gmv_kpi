@@ -78,25 +78,28 @@ FROM (
     shop AS (
     SELECT
       sd.shop_id,
-      sd.shop_country_code,
-      cd.geographic_region_code AS region,
+      sd.country_code,
+      CASE
+        WHEN fc.netsuite_region = 'NORAM' THEN 'NA'
+      ELSE
+      fc.netsuite_region
+    END
+      AS region,
       fc.fpa_region_14,
       CASE
-        WHEN sd.current_merchant_deal_type = 'Plus Merchant' THEN 'Plus'
+        WHEN sub.is_plus = TRUE THEN 'Plus'
       ELSE
       'Standard'
     END
       AS merchant_type
     FROM
-      `sdp-prd-finance-automation.fpa_reporting_base.base__shop_dimension` AS sd
-    LEFT JOIN
-      `sdp-prd-finance-automation.fpa_reporting_base.base__country_dimension` AS cd
-    ON
-      sd.shop_country_code = cd.country_code
+      `shopify-dw.intermediate.shop_profile_history_v1` AS sd
     LEFT JOIN
       `shopify-dw.finance.countries`AS fc
     ON
-      cd.country_code = fc.country_code
+      sd.country_code = fc.country_code
+    LEFT JOIN `shopify-dw.intermediate.shop_subscription_history_v1`as sub
+  ON sd.shop_id = sub.shop_id
     GROUP BY
       1,
       2,
@@ -153,7 +156,7 @@ FROM (
   LEFT JOIN
     shop
   ON
-    cast(vol.shop_id as string) = shop.shop_id
+    vol.shop_id = shop.shop_id
   WHERE
     DATE_TRUNC(vol.reported_at, day) >= '2021-01-01'
   GROUP BY
